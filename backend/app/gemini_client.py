@@ -1,8 +1,12 @@
 import json
+import logging
 import google.generativeai as genai
 from typing import Dict, Any
 from .config import settings
 from .models import SQLResponse
+
+# Configure logging
+logger = logging.getLogger(__name__)
 
 
 class GeminiClient:
@@ -24,6 +28,8 @@ class GeminiClient:
     async def nl_to_sql(self, user_query: str, schema: str) -> SQLResponse:
         """Convert natural language to SQL using Gemini 2.5 Pro"""
         
+        logger.info(f"🔄 Converting NL to SQL: '{user_query}'")
+        
         prompt = self._build_prompt(user_query, schema)
         
         try:
@@ -35,6 +41,7 @@ class GeminiClient:
             
             # Extract and parse JSON response
             content = response.text.strip()
+            logger.info(f"📝 Raw LLM Response: {content}")
             
             # Try to extract JSON from the response
             try:
@@ -45,21 +52,32 @@ class GeminiClient:
                     content = content.replace('```', '').strip()
                 
                 result = json.loads(content)
+                logger.info(f"✅ Parsed JSON: {result}")
                 
-                return SQLResponse(
+                sql_response = SQLResponse(
                     sql=result.get("sql", ""),
                     explanation=result.get("explanation", "")
                 )
                 
-            except json.JSONDecodeError:
+                logger.info(f"🔍 Generated SQL: {sql_response.sql}")
+                if sql_response.explanation:
+                    logger.info(f"💡 Explanation: {sql_response.explanation}")
+                
+                return sql_response
+                
+            except json.JSONDecodeError as e:
+                logger.warning(f"⚠️ JSON parsing failed: {e}")
+                logger.info(f"📄 Attempting fallback SQL extraction from: {content}")
                 # Fallback: try to extract SQL from response
                 sql = self._extract_sql_fallback(content)
+                logger.info(f"🔧 Fallback SQL: {sql}")
                 return SQLResponse(
                     sql=sql,
                     explanation="Generated SQL (JSON parsing failed)"
                 )
                 
         except Exception as e:
+            logger.error(f"❌ Gemini API call failed: {str(e)}")
             raise Exception(f"Gemini API call failed: {str(e)}")
     
     def _build_prompt(self, user_query: str, schema: str) -> str:

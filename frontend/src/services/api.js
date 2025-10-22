@@ -49,6 +49,36 @@ export const apiService = {
       sql: sql
     })
     return response.data
+  },
+
+  // Generate insights
+  async generateInsights(userQuery, results, sql) {
+    const response = await api.post('/generate-insights', {
+      user_query: userQuery,
+      results: results,
+      sql: sql
+    })
+    return response.data
+  },
+
+  // Generate visualization
+  async generateVisualization(userQuery, results, sql) {
+    console.log('🌐 API Service: Sending visualization request:', {
+      user_query: userQuery,
+      results: results?.length,
+      sql: sql
+    })
+    
+    const response = await api.post('/generate-visualization', {
+      user_query: userQuery,
+      results: results,
+      sql: sql
+    })
+    
+    console.log('🌐 API Service: Received response:', response)
+    console.log('🌐 API Service: Response data:', response.data)
+    
+    return response.data
   }
 }
 

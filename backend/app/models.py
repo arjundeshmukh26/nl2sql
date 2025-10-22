@@ -27,6 +27,7 @@ class QueryResponse(BaseModel):
     results: List[Dict[str, Any]]
     row_count: int
     execution_time_ms: float
+    suggested_chart_type: Optional[str] = "table"
 
 
 class ErrorResponse(BaseModel):

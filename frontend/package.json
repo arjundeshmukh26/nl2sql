@@ -16,7 +16,9 @@
     "axios": "^1.6.2",
     "lucide-react": "^0.294.0",
     "react-syntax-highlighter": "^15.5.0",
-    "react-hot-toast": "^2.4.1"
+    "react-hot-toast": "^2.4.1",
+    "chart.js": "^4.4.0",
+    "react-chartjs-2": "^5.2.0"
   },
   "devDependencies": {
     "@types/react": "^18.2.37",
