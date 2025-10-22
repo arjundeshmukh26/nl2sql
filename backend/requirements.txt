@@ -1,0 +1,8 @@
+fastapi
+uvicorn[standard]
+asyncpg
+pydantic
+google-generativeai
+python-dotenv
+httpx
+python-multipart

@@ -1,0 +1,7 @@
+POST http://localhost:8000/query
+Content-Type: application/json
+
+{
+  "schema_text": "Table: markets\n- id (integer, primary key)\n- market_name (varchar)\n- region (varchar)\n\nTable: products\n- id (integer, primary key)\n- product_name (varchar)\n- category (varchar)\n- price (decimal)\n\nTable: sales\n- id (integer, primary key)\n- market_id (integer, foreign key to markets.id)\n- product_id (integer, foreign key to products.id)\n- quantity (integer)\n- revenue (decimal)\n- sale_date (date)",
+  "query": "Show total revenue for each market in 2024, sorted from highest to lowest."
+}
