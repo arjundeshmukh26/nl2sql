@@ -119,7 +119,14 @@ const ChatPage = () => {
       }
       
       setMessages(prev => [...prev, errorMessage])
-      toast.error('Query failed. Please check your input and try again.')
+      
+      if (error.response?.status === 429) {
+        toast.error('⏱️ API quota exceeded. Please wait before making more requests.', {
+          duration: 5000
+        })
+      } else {
+        toast.error('Query failed. Please check your input and try again.')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -151,7 +158,15 @@ const ChatPage = () => {
       
       toast.success('Insights generated successfully!')
     } catch (error) {
-      toast.error('Failed to generate insights: ' + (error.response?.data?.detail || error.message))
+      const errorMessage = error.response?.data?.detail || error.message
+      
+      if (error.response?.status === 429) {
+        toast.error('⏱️ API quota exceeded. Please wait before making more requests.', {
+          duration: 5000
+        })
+      } else {
+        toast.error('Failed to generate insights: ' + errorMessage)
+      }
     } finally {
       setLoadingInsights(prev => ({ ...prev, [messageId]: false }))
     }
@@ -194,7 +209,15 @@ const ChatPage = () => {
       
       toast.success('Visualization generated successfully!')
     } catch (error) {
-      toast.error('Failed to generate visualization: ' + (error.response?.data?.detail || error.message))
+      const errorMessage = error.response?.data?.detail || error.message
+      
+      if (error.response?.status === 429) {
+        toast.error('⏱️ API quota exceeded. Please wait before making more requests.', {
+          duration: 5000
+        })
+      } else {
+        toast.error('Failed to generate visualization: ' + errorMessage)
+      }
     } finally {
       setLoadingViz(prev => ({ ...prev, [messageId]: false }))
     }
@@ -334,6 +357,19 @@ const ChatPage = () => {
         values = data.map(row => parseFloat(row[valueColumn]) || 0)
         console.log(`🎨 Using multi-category: ${labelParts.join(' + ')} vs ${valueColumn}`)
         
+      } else if (chartType === 'scatter' && numericColumns.length >= 2) {
+        // Scatter plot: two numeric columns for x and y
+        const xColumn = numericColumns[0] // First numeric column (e.g., price)
+        const yColumn = numericColumns[1] // Second numeric column (e.g., total_revenue)
+        
+        labels = data.map(row => String(row[categoryColumns[0]] || '')) // Product names for tooltips
+        values = data.map(row => ({
+          x: parseFloat(row[xColumn]) || 0,
+          y: parseFloat(row[yColumn]) || 0,
+          label: String(row[categoryColumns[0]] || '') // Product name for tooltip
+        }))
+        console.log(`🎨 Using scatter plot: ${xColumn} vs ${yColumn}`)
+        
       } else if (categoryColumns.length >= 1 && valueColumn) {
         // Single category data
         const labelCol = categoryColumns[0]
@@ -404,35 +440,37 @@ const ChatPage = () => {
         values.valueColumn.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) :
         'Value'
       
+      // Check if this is scatter plot data (array of {x, y} objects)
+      const isScatterData = Array.isArray(values) && values.length > 0 && 
+                           typeof values[0] === 'object' && 'x' in values[0] && 'y' in values[0]
+      
       chartData = {
-        labels,
+        labels: isScatterData ? [] : labels, // Scatter plots don't use labels array
         datasets: [
           {
             label: datasetLabel,
             data: Array.isArray(values) ? values : [],
-            backgroundColor: chartType === 'line' ? 'rgba(59, 130, 246, 0.1)' : colors,
-            borderColor: chartType === 'line' ? 'rgba(59, 130, 246, 1)' : borderColors,
-            borderWidth: 2,
+            backgroundColor: chartType === 'line' ? 'rgba(59, 130, 246, 0.1)' : 
+                           chartType === 'scatter' ? 'rgba(59, 130, 246, 0.6)' : colors,
+            borderColor: chartType === 'line' ? 'rgba(59, 130, 246, 1)' : 
+                        chartType === 'scatter' ? 'rgba(59, 130, 246, 1)' : borderColors,
+            borderWidth: chartType === 'scatter' ? 1 : 2,
             fill: chartType === 'area',
             tension: chartType === 'line' ? 0.4 : 0,
-            pointBackgroundColor: chartType === 'line' ? 'rgba(59, 130, 246, 1)' : undefined,
-            pointBorderColor: chartType === 'line' ? '#fff' : undefined,
-            pointBorderWidth: chartType === 'line' ? 2 : undefined,
+            pointBackgroundColor: chartType === 'line' ? 'rgba(59, 130, 246, 1)' : 
+                                 chartType === 'scatter' ? 'rgba(59, 130, 246, 0.8)' : undefined,
+            pointBorderColor: chartType === 'line' ? '#fff' : 
+                             chartType === 'scatter' ? '#fff' : undefined,
+            pointBorderWidth: chartType === 'line' ? 2 : 
+                             chartType === 'scatter' ? 2 : undefined,
+            pointRadius: chartType === 'scatter' ? 6 : undefined,
+            pointHoverRadius: chartType === 'scatter' ? 8 : undefined,
           },
         ],
       }
     }
 
-    // Special handling for scatter plots
-    if (chartType === 'scatter' && data.length > 0) {
-      const keys = Object.keys(data[0])
-      if (keys.length >= 2) {
-        chartData.datasets[0].data = data.map(row => ({
-          x: row[keys[0]],
-          y: row[keys[1]]
-        }))
-      }
-    }
+    // Scatter plot data is now handled in the data mapping logic above
 
     const baseOptions = {
       responsive: true,
@@ -449,6 +487,8 @@ const ChatPage = () => {
             display: true,
             text: typeof values === 'object' && values.seriesData ? 
               `${values.valueColumn?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Value'} by ${values.categoryCol?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Category'} Over Time` :
+              chartType === 'scatter' && Array.isArray(values) && values.length > 0 && 'x' in values[0] ?
+              `${Object.keys(data[0])[1]?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Y'} vs ${Object.keys(data[0])[0]?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'X'}` :
               `${chartData.datasets[0]?.label || 'Value'} by ${Object.keys(data[0])[0]?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Category'}`,
           font: {
             size: 16,

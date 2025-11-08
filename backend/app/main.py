@@ -135,23 +135,6 @@ async def execute_query(request: QueryRequest):
         
         # Calculate execution time
         execution_time_ms = (time.time() - start_time) * 1000
-        
-        # Suggest chart type based on query and results
-        suggested_chart_type = "table"  # Default
-        if results and len(results) > 0:
-            columns = list(results[0].keys())
-            if len(columns) == 2:
-                # Two columns - good for bar/line charts
-                if any(keyword in request.query.lower() for keyword in ['trend', 'over time', 'by month', 'by year']):
-                    suggested_chart_type = "line"
-                else:
-                    suggested_chart_type = "bar"
-            elif len(columns) > 2:
-                # Multiple columns - table or stacked chart
-                if len(results) <= 10:
-                    suggested_chart_type = "bar"
-                else:
-                    suggested_chart_type = "table"
 
         return QueryResponse(
             sql=sql_response.sql,
@@ -159,16 +142,33 @@ async def execute_query(request: QueryRequest):
             results=results,
             row_count=len(results),
             execution_time_ms=execution_time_ms,
-            suggested_chart_type=suggested_chart_type
+            suggested_chart_type="table"  # Default - actual chart type decided by LLM in visualization endpoint
         )
         
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Query processing failed: {str(e)}"
-        )
+        error_msg = str(e)
+        
+        # Handle specific API quota errors
+        if "429" in error_msg and "quota" in error_msg.lower():
+            logger.warning(f"⚠️ API quota exceeded: {error_msg}")
+            raise HTTPException(
+                status_code=429,
+                detail="API quota exceeded. Please wait before making more requests or upgrade your API plan."
+            )
+        elif "rate limit" in error_msg.lower():
+            logger.warning(f"⚠️ Rate limit hit: {error_msg}")
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Please wait a moment before trying again."
+            )
+        else:
+            logger.error(f"❌ Query processing failed: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Query processing failed: {error_msg}"
+            )
 
 
 @app.post("/validate-schema")
@@ -289,10 +289,27 @@ Format as clear, concise bullet points.
         }
         
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Insights generation failed: {str(e)}"
-        )
+        error_msg = str(e)
+        
+        # Handle specific API quota errors
+        if "429" in error_msg and "quota" in error_msg.lower():
+            logger.warning(f"⚠️ API quota exceeded: {error_msg}")
+            raise HTTPException(
+                status_code=429,
+                detail="API quota exceeded. Please wait before making more requests or upgrade your API plan."
+            )
+        elif "rate limit" in error_msg.lower():
+            logger.warning(f"⚠️ Rate limit hit: {error_msg}")
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Please wait a moment before trying again."
+            )
+        else:
+            logger.error(f"❌ Insights generation failed: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Insights generation failed: {error_msg}"
+            )
 
 
 @app.post("/generate-visualization")
@@ -321,27 +338,38 @@ Columns: {columns}
 Sample Data: {sample_data[:3]}
 Total Rows: {len(results)}
 
-IMPORTANT: The original query returned {len(results)} rows. If this is 0 or very few rows, DO NOT create a more complex aggregation - just use the original SQL with an appropriate chart type.
+IMPORTANT: The original query returned {len(results)} rows. 
+If this is 0 or very few rows, DO NOT create a more complex aggregation - just use the original SQL with an appropriate chart type.
 
 Chart Type Guidelines:
 - BAR: Categories vs values, comparisons, rankings
-- LINE: Time series, trends over time, continuous data
-- PIE: Parts of a whole, percentages, distributions (max 8 slices)
+- LINE: Time series, trends over time (non-cumulative)
+- PIE: Parts of a whole, percentages, simple distributions (max 8 slices)
+- DOUGHNUT: Parts of a whole grouped by higher-level category (e.g., by region)
 - SCATTER: Correlation between two continuous variables
-- AREA: Cumulative values over time
-- DOUGHNUT: Similar to pie but with center space
-- RADAR: Multi-dimensional data comparison
+- AREA: Cumulative or progressive totals over time (e.g., revenue growth)
+- RADAR: Multi-dimensional metrics comparison (e.g., avg revenue, avg quantity, avg price per category)
 
 Rules:
 1. If original query has 0 rows, return the original SQL unchanged
 2. If original query has < 15 rows, ALWAYS keep the original SQL - it's already perfect for visualization
-3. If the data already has aggregated/summarized columns (like totals, percentages, counts), use original SQL
+3. If the data already has aggregated columns (like totals, percentages, counts), use original SQL
 4. Only create aggregation if original has > 20 rows AND needs grouping/summarization
-5. Choose the most appropriate chart type based on data characteristics
-6. Return JSON format: {{"sql": "original_sql_here", "chart_type": "bar|line|pie|scatter|area|doughnut|radar", "explanation": "why this chart type - mention using original data"}}
+5. Choose the most appropriate chart type based on data characteristics:
+   - Use DOUGHNUT if grouping by region or other high-level categories
+   - Use RADAR if multiple numeric metrics per category are present
+   - Use AREA if cumulative or running totals are implied
+6. Return JSON format: {{
+    "sql": "original_sql_here",
+    "chart_type": "bar|line|pie|scatter|area|doughnut|radar",
+    "explanation": "why this chart type - mention using original data"
+}}
 
-IMPORTANT: For queries with < 15 rows that already contain aggregated data, ALWAYS use the original SQL unchanged.
+IMPORTANT:
+- For queries with < 15 rows that already contain aggregated data, ALWAYS use the original SQL unchanged.
+- Encourage using different chart types based on semantics rather than defaulting to bar or line.
 """
+
         
         logger.info(f"📊 Generating visualization for query: '{user_query}'")
         response = gemini_client.model.generate_content(
@@ -438,10 +466,27 @@ IMPORTANT: For queries with < 15 rows that already contain aggregated data, ALWA
         return response_data
         
     except Exception as e:
-        raise HTTPException(
-            status_code=500,
-            detail=f"Visualization generation failed: {str(e)}"
-        )
+        error_msg = str(e)
+        
+        # Handle specific API quota errors
+        if "429" in error_msg and "quota" in error_msg.lower():
+            logger.warning(f"⚠️ API quota exceeded: {error_msg}")
+            raise HTTPException(
+                status_code=429,
+                detail="API quota exceeded. Please wait before making more requests or upgrade your API plan."
+            )
+        elif "rate limit" in error_msg.lower():
+            logger.warning(f"⚠️ Rate limit hit: {error_msg}")
+            raise HTTPException(
+                status_code=429,
+                detail="Rate limit exceeded. Please wait a moment before trying again."
+            )
+        else:
+            logger.error(f"❌ Visualization generation failed: {error_msg}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Visualization generation failed: {error_msg}"
+            )
 
 
 if __name__ == "__main__":
