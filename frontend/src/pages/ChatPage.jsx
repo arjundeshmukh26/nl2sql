@@ -119,7 +119,14 @@ const ChatPage = () => {
       }
       
       setMessages(prev => [...prev, errorMessage])
-      toast.error('Query failed. Please check your input and try again.')
+      
+      if (error.response?.status === 429) {
+        toast.error('⏱️ API quota exceeded. Please wait before making more requests.', {
+          duration: 5000
+        })
+      } else {
+        toast.error('Query failed. Please check your input and try again.')
+      }
     } finally {
       setIsLoading(false)
     }
@@ -151,7 +158,15 @@ const ChatPage = () => {
       
       toast.success('Insights generated successfully!')
     } catch (error) {
-      toast.error('Failed to generate insights: ' + (error.response?.data?.detail || error.message))
+      const errorMessage = error.response?.data?.detail || error.message
+      
+      if (error.response?.status === 429) {
+        toast.error('⏱️ API quota exceeded. Please wait before making more requests.', {
+          duration: 5000
+        })
+      } else {
+        toast.error('Failed to generate insights: ' + errorMessage)
+      }
     } finally {
       setLoadingInsights(prev => ({ ...prev, [messageId]: false }))
     }
@@ -194,7 +209,15 @@ const ChatPage = () => {
       
       toast.success('Visualization generated successfully!')
     } catch (error) {
-      toast.error('Failed to generate visualization: ' + (error.response?.data?.detail || error.message))
+      const errorMessage = error.response?.data?.detail || error.message
+      
+      if (error.response?.status === 429) {
+        toast.error('⏱️ API quota exceeded. Please wait before making more requests.', {
+          duration: 5000
+        })
+      } else {
+        toast.error('Failed to generate visualization: ' + errorMessage)
+      }
     } finally {
       setLoadingViz(prev => ({ ...prev, [messageId]: false }))
     }
@@ -237,23 +260,134 @@ const ChatPage = () => {
       const columns = Object.keys(data[0])
       console.log('🎨 Available columns:', columns)
       
-      // For this specific data structure, create meaningful labels and values
+      // Dynamically determine data structure and mapping
       let labels, values
       
-      if (columns.includes('region') && columns.includes('category') && columns.includes('total_revenue')) {
-        // Create combined labels: "Region - Category"
-        labels = data.map(row => `${row.region} - ${row.category}`)
-        // Use total_revenue as the primary value (convert string to number)
-        values = data.map(row => parseFloat(row.total_revenue) || 0)
-        console.log('🎨 Using region-category labels with total_revenue values')
+      // Detect column types
+      const dateColumns = columns.filter(col => 
+        col.includes('date') || col.includes('time') || col.includes('month') || col.includes('year')
+      )
+      const numericColumns = columns.filter(col => {
+        const sampleValue = data[0][col]
+        return !isNaN(parseFloat(sampleValue)) && isFinite(sampleValue)
+      })
+      const categoryColumns = columns.filter(col => 
+        !dateColumns.includes(col) && !numericColumns.includes(col)
+      )
+      
+      console.log('🎨 Detected columns:', { dateColumns, numericColumns, categoryColumns })
+      
+      // Find the primary value column (numeric)
+      const valueColumn = numericColumns.find(col => 
+        col.includes('revenue') || col.includes('total') || col.includes('amount') || col.includes('value') || col.includes('count')
+      ) || numericColumns[0]
+      
+      // Determine chart structure based on data
+      if (dateColumns.length > 0 && categoryColumns.length > 0 && valueColumn && chartType === 'line') {
+        // Multi-series time series (e.g., sales by region over time)
+        const dateCol = dateColumns[0]
+        const categoryCol = categoryColumns[0]
+        
+        const seriesData = {}
+        const allDates = new Set()
+        
+        data.forEach(row => {
+          const dateValue = row[dateCol]
+          let formattedDate
+          
+          // Smart date formatting based on the data
+          try {
+            const date = new Date(dateValue)
+            if (dateValue.includes('-') && dateValue.length <= 10) {
+              // Date format (YYYY-MM-DD)
+              formattedDate = date.toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'short',
+                day: 'numeric'
+              })
+            } else {
+              // Month format or other
+              formattedDate = date.toLocaleDateString('en-US', { 
+                year: 'numeric', 
+                month: 'short' 
+              })
+            }
+          } catch {
+            formattedDate = String(dateValue)
+          }
+          
+          allDates.add(formattedDate)
+          
+          const category = row[categoryCol]
+          if (!seriesData[category]) {
+            seriesData[category] = {}
+          }
+          seriesData[category][formattedDate] = parseFloat(row[valueColumn]) || 0
+        })
+        
+        labels = Array.from(allDates).sort((a, b) => new Date(a) - new Date(b))
+        values = { seriesData, labels, categoryCol, valueColumn }
+        console.log(`🎨 Using multi-series time series: ${categoryCol} over ${dateCol}`)
+        
+      } else if (dateColumns.length > 0 && valueColumn) {
+        // Simple time series
+        const dateCol = dateColumns[0]
+        
+        labels = data.map(row => {
+          try {
+            const date = new Date(row[dateCol])
+            return date.toLocaleDateString('en-US', { 
+              year: 'numeric', 
+              month: 'short',
+              day: 'numeric'
+            })
+          } catch {
+            return String(row[dateCol])
+          }
+        })
+        values = data.map(row => parseFloat(row[valueColumn]) || 0)
+        console.log(`🎨 Using simple time series: ${dateCol} vs ${valueColumn}`)
+        
+      } else if (categoryColumns.length >= 2 && valueColumn) {
+        // Multi-category data (e.g., region + category)
+        const labelParts = categoryColumns.slice(0, 2)
+        labels = data.map(row => 
+          labelParts.map(col => row[col]).join(' - ')
+        )
+        values = data.map(row => parseFloat(row[valueColumn]) || 0)
+        console.log(`🎨 Using multi-category: ${labelParts.join(' + ')} vs ${valueColumn}`)
+        
+      } else if (chartType === 'scatter' && numericColumns.length >= 2) {
+        // Scatter plot: two numeric columns for x and y
+        const xColumn = numericColumns[0] // First numeric column (e.g., price)
+        const yColumn = numericColumns[1] // Second numeric column (e.g., total_revenue)
+        
+        labels = data.map(row => String(row[categoryColumns[0]] || '')) // Product names for tooltips
+        values = data.map(row => ({
+          x: parseFloat(row[xColumn]) || 0,
+          y: parseFloat(row[yColumn]) || 0,
+          label: String(row[categoryColumns[0]] || '') // Product name for tooltip
+        }))
+        console.log(`🎨 Using scatter plot: ${xColumn} vs ${yColumn}`)
+        
+      } else if (categoryColumns.length >= 1 && valueColumn) {
+        // Single category data
+        const labelCol = categoryColumns[0]
+        labels = data.map(row => String(row[labelCol]))
+        values = data.map(row => parseFloat(row[valueColumn]) || 0)
+        console.log(`🎨 Using single category: ${labelCol} vs ${valueColumn}`)
+        
       } else {
         // Fallback: use first column as labels, second as values
-        labels = data.map(row => Object.values(row)[0])
+        const labelCol = columns[0]
+        const valueCol = columns[1] || columns[0]
+        
+        labels = data.map(row => String(row[labelCol]))
         values = data.map(row => {
-          const val = Object.values(row)[1]
-          return typeof val === 'string' ? parseFloat(val) || 0 : val
+          const val = row[valueCol]
+          return typeof val === 'string' ? parseFloat(val) || 0 : (val || 0)
         })
-        console.log('🎨 Using fallback: first column as labels, second as values')
+        console.log(`🎨 Using fallback: ${labelCol} vs ${valueCol}`)
       }
       
       console.log('🎨 Final labels:', labels)
@@ -274,34 +408,69 @@ const ChatPage = () => {
 
     const borderColors = colors.map(color => color.replace('0.8', '1'))
     
-      const chartData = {
-        labels,
-        datasets: [
-          {
-            label: 'Total Revenue',
-          data: values,
-          backgroundColor: chartType === 'line' ? 'rgba(59, 130, 246, 0.1)' : colors,
-          borderColor: chartType === 'line' ? 'rgba(59, 130, 246, 1)' : borderColors,
-          borderWidth: 2,
+    let chartData
+    
+    // Handle multi-series data (dynamic)
+    if (typeof values === 'object' && values.seriesData) {
+      const series = Object.keys(values.seriesData)
+      const datasetLabel = values.valueColumn ? 
+        values.valueColumn.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) : 
+        'Value'
+      
+      chartData = {
+        labels: values.labels,
+        datasets: series.map((seriesName, index) => ({
+          label: seriesName,
+          data: values.labels.map(label => values.seriesData[seriesName][label] || 0),
+          backgroundColor: colors[index % colors.length].replace('0.8', '0.1'),
+          borderColor: colors[index % colors.length].replace('0.8', '1'),
+          borderWidth: 3,
           fill: chartType === 'area',
-          tension: chartType === 'line' ? 0.4 : 0,
-          pointBackgroundColor: chartType === 'line' ? 'rgba(59, 130, 246, 1)' : undefined,
-          pointBorderColor: chartType === 'line' ? '#fff' : undefined,
-          pointBorderWidth: chartType === 'line' ? 2 : undefined,
-        },
-      ],
-    }
-
-    // Special handling for scatter plots
-    if (chartType === 'scatter' && data.length > 0) {
-      const keys = Object.keys(data[0])
-      if (keys.length >= 2) {
-        chartData.datasets[0].data = data.map(row => ({
-          x: row[keys[0]],
-          y: row[keys[1]]
+          tension: 0.4,
+          pointBackgroundColor: colors[index % colors.length].replace('0.8', '1'),
+          pointBorderColor: '#fff',
+          pointBorderWidth: 2,
+          pointRadius: 4,
+          pointHoverRadius: 6,
         }))
       }
+    } else {
+      // Standard single dataset
+      const datasetLabel = typeof values === 'object' && values.valueColumn ? 
+        values.valueColumn.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) :
+        'Value'
+      
+      // Check if this is scatter plot data (array of {x, y} objects)
+      const isScatterData = Array.isArray(values) && values.length > 0 && 
+                           typeof values[0] === 'object' && 'x' in values[0] && 'y' in values[0]
+      
+      chartData = {
+        labels: isScatterData ? [] : labels, // Scatter plots don't use labels array
+        datasets: [
+          {
+            label: datasetLabel,
+            data: Array.isArray(values) ? values : [],
+            backgroundColor: chartType === 'line' ? 'rgba(59, 130, 246, 0.1)' : 
+                           chartType === 'scatter' ? 'rgba(59, 130, 246, 0.6)' : colors,
+            borderColor: chartType === 'line' ? 'rgba(59, 130, 246, 1)' : 
+                        chartType === 'scatter' ? 'rgba(59, 130, 246, 1)' : borderColors,
+            borderWidth: chartType === 'scatter' ? 1 : 2,
+            fill: chartType === 'area',
+            tension: chartType === 'line' ? 0.4 : 0,
+            pointBackgroundColor: chartType === 'line' ? 'rgba(59, 130, 246, 1)' : 
+                                 chartType === 'scatter' ? 'rgba(59, 130, 246, 0.8)' : undefined,
+            pointBorderColor: chartType === 'line' ? '#fff' : 
+                             chartType === 'scatter' ? '#fff' : undefined,
+            pointBorderWidth: chartType === 'line' ? 2 : 
+                             chartType === 'scatter' ? 2 : undefined,
+            pointRadius: chartType === 'scatter' ? 6 : undefined,
+            pointHoverRadius: chartType === 'scatter' ? 8 : undefined,
+          },
+        ],
+      }
     }
+
+    // Scatter plot data is now handled in the data mapping logic above
 
     const baseOptions = {
       responsive: true,
@@ -316,7 +485,11 @@ const ChatPage = () => {
         },
           title: {
             display: true,
-            text: 'Total Revenue by Region and Category',
+            text: typeof values === 'object' && values.seriesData ? 
+              `${values.valueColumn?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Value'} by ${values.categoryCol?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Category'} Over Time` :
+              chartType === 'scatter' && Array.isArray(values) && values.length > 0 && 'x' in values[0] ?
+              `${Object.keys(data[0])[1]?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Y'} vs ${Object.keys(data[0])[0]?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'X'}` :
+              `${chartData.datasets[0]?.label || 'Value'} by ${Object.keys(data[0])[0]?.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase()) || 'Category'}`,
           font: {
             size: 16,
             weight: 'bold'
@@ -403,26 +576,35 @@ const ChatPage = () => {
   ]
 
   return (
-    <div className="h-screen flex flex-col bg-gradient-to-br from-gray-50 to-gray-100">
+    <div className="h-screen flex flex-col bg-stone-50">
       {/* Header */}
-      <header className="glass-effect border-b border-white/20 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className="p-2 bg-primary-100 rounded-lg">
-            <Sparkles className="h-6 w-6 text-primary-600" />
+      <header className="bg-white/80 backdrop-blur-sm border-b border-slate-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-gradient-to-br from-iris-500 to-iris-600 text-white">
+            <Database className="h-4 w-4" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">NL2SQL Chat</h1>
-            <p className="text-sm text-gray-600">Ask questions about your data in natural language</p>
+            <h1 className="text-base font-semibold text-slate-900">Query Assistant</h1>
+            <p className="text-xs text-slate-500">Ask questions in plain English</p>
           </div>
         </div>
         
-        <button
-          onClick={() => navigate('/config')}
-          className="flex items-center space-x-2 px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-        >
-          <Settings className="h-4 w-4" />
-          <span>Configure</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate('/agentic')}
+            className="btn bg-gradient-to-r from-coral-500 to-iris-500 text-white px-3 py-2 text-sm gap-2 hover:from-coral-600 hover:to-iris-600"
+          >
+            <Sparkles className="h-4 w-4" />
+            <span className="hidden sm:inline">Agentic Mode</span>
+          </button>
+          <button
+            onClick={() => navigate('/config')}
+            className="btn btn-ghost px-3 py-2 text-sm gap-2"
+          >
+            <Settings className="h-4 w-4" />
+            <span className="hidden sm:inline">Settings</span>
+          </button>
+        </div>
       </header>
 
       {/* Messages Area */}

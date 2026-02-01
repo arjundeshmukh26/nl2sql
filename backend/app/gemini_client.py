@@ -15,7 +15,7 @@ class GeminiClient:
         genai.configure(api_key=settings.gemini_api_key)
         
         # Initialize the model
-        self.model = genai.GenerativeModel('gemini-2.0-flash-exp')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         
         # Generation config for consistent JSON output
         self.generation_config = genai.types.GenerationConfig(
@@ -77,8 +77,15 @@ class GeminiClient:
                 )
                 
         except Exception as e:
-            logger.error(f"❌ Gemini API call failed: {str(e)}")
-            raise Exception(f"Gemini API call failed: {str(e)}")
+            error_msg = str(e)
+            logger.error(f"❌ Gemini API call failed: {error_msg}")
+            
+            # Handle rate limiting specifically
+            if "429" in error_msg or "quota" in error_msg.lower() or "Resource exhausted" in error_msg:
+                logger.warning(f"⚠️ Rate limit exceeded: {error_msg}")
+                raise Exception(f"API quota exceeded. Please wait 32 seconds before trying again. Details: {error_msg}")
+            
+            raise Exception(f"Gemini API call failed: {error_msg}")
     
     def _build_prompt(self, user_query: str, schema: str) -> str:
         """Build the complete prompt for NL2SQL conversion"""
