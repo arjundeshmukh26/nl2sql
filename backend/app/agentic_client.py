@@ -11,6 +11,7 @@ from .config import settings
 from .models import SQLResponse
 from .tools.tool_registry import get_tool_registry, ToolRegistry
 from .database import DatabaseManager
+from .memory_store import get_conversation_memory, ConversationMemory
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ class AgenticGeminiClient:
         # Configure Gemini API
         genai.configure(api_key=settings.gemini_api_key)
         
-        # Initialize the model
+        # Initialize the model (using lite version for higher rate limits)
         self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
         
         # Generation config for function calling
@@ -62,21 +63,110 @@ class AgenticGeminiClient:
         self.db_manager = db_manager
         self.tool_registry = get_tool_registry(db_manager)
         
+        # Initialize conversation memory
+        self.memory = get_conversation_memory()
+        
         # Investigation state
         self.current_investigation = []
         self.investigation_context = {}
         
         # Track investigation progress
         self.tools_executed_count = 0
+        
+        # Track executed tool calls to prevent duplicates
+        self.executed_tool_signatures = set()
     
     def _build_agentic_system_prompt(self) -> str:
-        """Build comprehensive system prompt for agentic behavior"""
+        """Build comprehensive system prompt for agentic behavior with memory awareness"""
         
         tool_categories = self.tool_registry.get_tools_by_category()
         
-        return f"""You are an expert autonomous database analyst with advanced investigation capabilities. You can conduct targeted, multi-step investigations based on the specific question asked.
+        # Get memory context
+        memory_context = self._get_memory_context_for_prompt()
+        
+        return f"""You are an expert autonomous database analyst with advanced investigation capabilities and CONVERSATION MEMORY. You can conduct targeted investigations while being smart about when to use tools vs. when to answer from existing context.
 
-## YOUR AVAILABLE TOOLS
+## 🧠 CONVERSATION MEMORY & CONTEXT
+
+{memory_context}
+
+## ⚡ QUERY COMPLEXITY ASSESSMENT (CRITICAL - READ FIRST!)
+
+Before making ANY tool calls, you MUST assess the query complexity:
+
+### SIMPLE QUERIES (Answer WITHOUT or with MINIMAL tool calls):
+- **Follow-up questions** about previous results ("what about...", "more details on...", "show me that again")
+- **Clarifications** of previous responses ("explain that", "what did you mean by...")
+- **References to recent data** ("the same data but...", "that query", "those results")
+- **General knowledge questions** about the data you've already seen
+- **Simple aggregations** you can calculate from memory context
+- **General Questions** about the database and its data etc or other such question that does not require tool calls.
+For simple queries:
+1. If it is straightforward question that can be answered from memory, answer directly without calling any tools.
+2. First call `get_conversation_context` to check what's in memory
+3. If the answer exists in context, respond directly WITHOUT additional database queries
+4. Only generate a visualization if one wasn't already provided for similar data
+
+### MODERATE QUERIES (Use 2-4 tools):
+- Questions needing ONE new piece of data combined with existing context
+- Slight variations on previous queries ("same analysis but for different region")
+- Basic comparisons that need fresh data
+
+### COMPLEX QUERIES (Full investigation - 4-6 tools):
+- Brand new topics not discussed before
+- Multi-faceted analysis requests
+- Deep-dive investigations
+- Anomaly detection requests
+- Comprehensive business analysis
+
+## 🎯 DECISION FLOW
+
+```
+User Query
+    │
+    ▼
+┌─────────────────────────────────────┐
+│ Is this a follow-up or reference    │
+│ to previous conversation?           │
+└─────────────────────────────────────┘
+    │YES                    │NO
+    ▼                       ▼
+┌─────────────────┐   ┌─────────────────┐
+│ get_conversation│   │ Is this a       │
+│ _context FIRST  │   │ simple factual  │
+└─────────────────┘   │ question?       │
+    │                 └─────────────────┘
+    ▼                       │YES    │NO
+┌─────────────────┐         ▼       ▼
+│ Can answer from │   ┌─────────┐ ┌─────────┐
+│ memory alone?   │   │Minimal  │ │Full     │
+└─────────────────┘   │tools    │ │invest-  │
+   │YES    │NO        │(1-2)    │ │igation  │
+   ▼       ▼          └─────────┘ └─────────┘
+┌──────┐ ┌──────┐
+│Answer│ │Fetch │
+│direct│ │delta │
+│ly    │ │only  │
+└──────┘ └──────┘
+```
+
+## 📊 MANDATORY VISUALIZATION RULE
+
+**EVERY response MUST include AT LEAST ONE visualization/graph**, regardless of query complexity:
+
+1. **Even for simple queries**: Generate at least one appropriate chart
+2. **Chart selection guide**:
+   - Comparisons/Rankings → `generate_bar_chart`
+   - Trends over time → `generate_line_chart`  
+   - Distributions/Proportions → `generate_pie_chart`
+   - Correlations/Relationships → `generate_scatter_plot`
+3. **If data exists in memory**: You can reuse/reference previous visualizations OR generate a new one with slightly different parameters
+4. **Minimum requirement**: At least ONE graph tool call per response
+
+## 🧰 YOUR AVAILABLE TOOLS
+
+### 🧠 MEMORY & CONTEXT (USE FIRST FOR FOLLOW-UPS!)
+{self._format_tool_category_help("memory_context", tool_categories)}
 
 ### 🔍 DATABASE DISCOVERY
 {self._format_tool_category_help("database_discovery", tool_categories)}
@@ -93,70 +183,85 @@ class AgenticGeminiClient:
 ### 📊 DATA ANALYSIS
 {self._format_tool_category_help("data_analysis", tool_categories)}
 
-### 📈 VISUALIZATION & GRAPHS
+### 📈 VISUALIZATION & GRAPHS (MANDATORY - At least ONE per response!)
 {self._format_tool_category_help("visualization", tool_categories)}
 {self._format_tool_category_help("graphs", tool_categories)}
 
-## QUERY-DRIVEN INVESTIGATION APPROACH
+## SMART INVESTIGATION APPROACH
 
-**KEY PRINCIPLE**: Your tool selection should be DRIVEN BY THE SPECIFIC QUESTION, not a fixed template.
+### For Follow-up Queries:
+1. Call `get_conversation_context` FIRST
+2. Check if answer exists in memory
+3. If yes → Answer directly + generate one relevant visualization
+4. If no → Fetch only the NEW data needed + visualization
 
-### Investigation Steps:
-1. **ALWAYS** start with `get_database_schema` to understand available data
-2. **READ THE QUERY** carefully to understand what's being asked
-3. **SELECT RELEVANT TOOLS** based on the query:
-   - Customer behavior → Analyze customer data, temporal patterns, segmentation
-   - Regions/markets → Compare markets, geographic distribution
-   - Time periods → Temporal analysis, trends over time
-   - Anomalies → Use anomaly detection tools
-   - Products → Product performance, rankings
-   - Performance → Business metrics, KPIs, trends
+### For New Queries:
+1. Start with `get_database_schema` (unless recently cached)
+2. Execute targeted SQL/analysis if required
+3. **ALWAYS** generate at least one visualization if it is possible and makes sense for that query.
+4. Provide data-backed insights
 
-4. **GENERATE RELEVANT VISUALIZATIONS**:
-   - Bar charts for comparisons and rankings
-   - Line charts for temporal trends
-   - Pie charts for distributions
-   - Scatter plots for correlations
-   - **Write SQL queries that answer the SPECIFIC question**
+### Example Smart Responses:
 
-5. **PROVIDE TARGETED ANALYSIS** focused on the user's actual query
+**User: "What were the top products again?"**
+→ Complexity: SIMPLE (follow-up)
+→ Action: `get_conversation_context` → Check if answered before → Answer from memory + `generate_bar_chart`
 
-### Example Query Mapping:
+**User: "Show me sales by region"**  
+→ Complexity: MODERATE (new but simple)
+→ Action: `get_database_schema` (if needed) → `generate_bar_chart` with region SQL → Answer
 
-**"What trends do you see in our customer behavior?"**
-→ Focus on: Customer patterns, temporal trends, behavior changes
-→ Tools: get_database_schema, execute_sql_query (customer analysis), generate_line_chart (behavior over time), detect_time_pattern_anomalies
-→ **DO NOT**: Generate generic product/market charts unrelated to customers
-
-**"Compare performance across regions"**
-→ Focus on: Regional comparisons, geographic distribution
-→ Tools: get_database_schema, generate_bar_chart (regions comparison), generate_pie_chart (regional distribution)
-→ **DO NOT**: Generate time trends or scatter plots
-
-**"Find anomalies in our data"**
-→ Focus on: Outliers, unusual patterns, data quality issues
-→ Tools: get_database_schema, detect_revenue_anomalies, detect_time_pattern_anomalies, detect_customer_behavior_anomalies, relevant charts
-→ **DO NOT**: Generate business summaries
+**User: "Do a deep analysis of customer behavior anomalies"**
+→ Complexity: COMPLEX (deep investigation)
+→ Action: Full investigation with 5-6 tools including multiple visualizations
 
 ## CRITICAL RULES
 
-1. **Query-Driven**: Let the user's question guide your tool selection
-2. **Relevant SQL**: Write SQL queries that directly answer the question
-3. **Targeted**: Use 4-6 tools maximum, all relevant to the query
-4. **Data-Backed**: Cite specific numbers from your analysis
-5. **Focused**: Stay on topic - don't provide generic business advice
+1. **General Questions** about the database and its data etc or other such question that does not require tool calls.
+2. **Memory First**: Always check conversation context for follow-ups
+3. **Smart Tool Use**: Don't repeat expensive queries if data is in memory
+4. **Mandatory Graphs**: EVERY response needs at least ONE visualization
+5. **Efficient**: Use minimum tools needed to answer the query
+6. **Data-Backed**: Always cite specific numbers from your analysis
+7. **Context-Aware**: Build on previous conversations, don't start fresh every time
+8. **NO DUPLICATE TOOL CALLS**: NEVER call the same tool with the same parameters twice! Once a tool has returned data, use that data - do NOT call it again. If you've already generated a bar chart for "revenue by region", do NOT generate another one. Move on to different analysis or provide your final conclusion.
 
-## RESPONSE QUALITY
+## RESPONSE FORMAT
 
-Your final analysis must:
-- **Answer the specific question asked**
-- **Use actual data** from the tools you executed
-- **Cite specific numbers**, percentages, and metrics
-- **Focus on the query topic** (customers, regions, products, etc.)
-- **Avoid generic advice** unrelated to the query
-
-REMEMBER: You are investigating a SPECIFIC question, not conducting a generic business review. Stay focused and relevant!
+For EVERY response, ensure:
+✅ At least one visualization/graph
+✅ Specific data points and numbers  
+✅ Direct answer to the user's question
+✅ Efficient tool usage based on query complexity
+✅ The response is strictly relevant to the original query. 
 """
+    
+    def _get_memory_context_for_prompt(self) -> str:
+        """Get formatted memory context to include in system prompt"""
+        if not self.memory.exchanges:
+            return """**No previous conversation context available.**
+This is a fresh conversation - you should conduct a full investigation for the user's query."""
+        
+        context_parts = [f"**You have memory of the last {len(self.memory.exchanges)} conversation(s).**"]
+        context_parts.append("\n### Recent Conversation Summary:")
+        
+        for i, exchange in enumerate(list(self.memory.exchanges)[-3:], 1):
+            context_parts.append(f"\n**Exchange {i}:**")
+            context_parts.append(f"- User asked: \"{exchange.user_query[:100]}{'...' if len(exchange.user_query) > 100 else ''}\"")
+            if exchange.sql_generated:
+                context_parts.append(f"- SQL used: `{exchange.sql_generated[:80]}...`")
+            if exchange.visualization_type:
+                context_parts.append(f"- Visualization: {exchange.visualization_type}")
+            if exchange.tools_used:
+                context_parts.append(f"- Tools used: {', '.join(exchange.tools_used[:5])}")
+        
+        tables = self.memory.get_mentioned_tables()
+        if tables:
+            context_parts.append(f"\n**Tables discussed:** {', '.join(tables)}")
+        
+        context_parts.append("\n\n**Use `get_conversation_context` tool to retrieve full details when needed for follow-up queries.**")
+        
+        return "\n".join(context_parts)
     
     def _format_tool_category_help(self, category: str, tool_categories: Dict) -> str:
         """Format help text for a tool category"""
@@ -191,6 +296,7 @@ REMEMBER: You are investigating a SPECIFIC question, not conducting a generic bu
         
         # Reset investigation state
         self.current_investigation = []
+        self.executed_tool_signatures = set()  # Reset duplicate tracking
         
         # Detect if this is an anomaly detection query
         is_anomaly_query = self._is_anomaly_query(user_query)
@@ -242,6 +348,7 @@ Use 4-6 tools maximum. Be targeted and relevant to the query."""
         max_iterations = 8  # Reasonable limit for query-driven investigations
         iteration = 0
         empty_call_count = 0  # Track consecutive empty function calls
+        duplicate_call_count = 0  # Track consecutive duplicate tool calls
         
         # Rate limiting configuration - reduced for faster iteration
         normal_delay = 30.0  # Normal delay between tool calls (5 seconds)
@@ -271,6 +378,11 @@ Use 4-6 tools maximum. Be targeted and relevant to the query."""
                         if empty_call_count >= 3:
                             logger.info("🔄 Too many empty function calls, ending investigation")
                             break
+                
+                # Check if too many duplicate calls - force termination
+                if duplicate_call_count >= 3:
+                    logger.info("🔄 Too many duplicate tool calls detected, forcing termination")
+                    break
                 
                 # Generate response with function calling
                 response = await self._generate_with_tools(combined_prompt, tool_definitions)
@@ -310,6 +422,28 @@ Use 4-6 tools maximum. Be targeted and relevant to the query."""
                                 if not self.tool_registry.get_tool(tool_name):
                                     logger.error(f"❌ Tool '{tool_name}' not found in registry. Available tools: {self.tool_registry.list_tools()}")
                                     continue
+                                
+                                # Create a signature for this tool call to detect duplicates
+                                # Sort parameters for consistent hashing
+                                param_str = json.dumps(parameters, sort_keys=True, default=str)
+                                tool_signature = f"{tool_name}:{param_str}"
+                                
+                                # Check for duplicate tool calls
+                                if tool_signature in self.executed_tool_signatures:
+                                    duplicate_call_count += 1
+                                    logger.warning(f"⚠️ Skipping duplicate tool call: {tool_name} (duplicate #{duplicate_call_count})")
+                                    # Add instruction to prompt to not repeat this tool
+                                    combined_prompt += f"\n\n⚠️ DUPLICATE DETECTED: You already called {tool_name} with the same parameters. DO NOT call it again. Either use different parameters, call a different tool, or provide your final analysis."
+                                    
+                                    # If too many duplicates, terminate investigation
+                                    if duplicate_call_count >= 2:
+                                        logger.info("🔄 Too many duplicate tool calls, forcing conclusion")
+                                        combined_prompt += "\n\n🛑 STOP: You have been repeating the same tool calls. Please provide your FINAL ANALYSIS now based on all the data collected so far. Do NOT call any more tools."
+                                    continue
+                                
+                                # Add to executed signatures and reset duplicate counter on successful new call
+                                self.executed_tool_signatures.add(tool_signature)
+                                duplicate_call_count = 0  # Reset on successful unique tool call
                                 
                                 # Create investigation step
                                 step = AgenticInvestigationStep(
@@ -479,24 +613,48 @@ Use 4-6 tools maximum. Be targeted and relevant to the query."""
             findings_summary = self._create_findings_summary()
             
             # Generate final conclusions without tools
+            # Determine the query type to customize the analysis
+            original_query = self.current_investigation[0].description if self.current_investigation else "unknown query"
+            
             conclusion_prompt = f"""
-You are a business analyst reviewing investigation findings. Based on the ACTUAL DATA below, provide comprehensive insights.
+You are a senior business analyst reviewing database investigation findings. Your task is to provide comprehensive, data-driven insights.
+
+ORIGINAL USER QUERY: {original_query}
 
 {findings_summary}
 
 CRITICAL INSTRUCTIONS:
-1. USE THE ACTUAL DATA from the anomaly detection results above
-2. Cite specific numbers, anomalies, and patterns found in the data
-3. Do NOT make up generic insights - use only what's in the data above
-4. Focus on ANOMALIES if this was an anomaly detection query
+1. USE ONLY THE ACTUAL DATA shown above - cite specific numbers, values, and statistics
+2. Reference the exact figures from the investigation (e.g., "$13,970.00 for North region")
+3. Do NOT make up generic insights - every claim must be backed by data above
+4. Compare and contrast values where relevant (e.g., "North is 43% higher than South")
+5. Identify the highest, lowest, trends, and outliers in the data
 
-Please provide:
-1. **Key Findings Summary** - What anomalies and patterns were actually found?
-2. **Anomaly Analysis** - What specific outliers were detected?
-3. **Business Impact** - What do these anomalies mean for the business?
-4. **Actionable Recommendations** - Specific next steps based on the findings
+Please provide a comprehensive analysis with these sections:
 
-Be SPECIFIC and DATA-DRIVEN. Reference actual values from the investigation results.
+## 1. Key Findings Summary
+- What are the main insights from the data?
+- What patterns or trends are visible?
+- Cite specific numbers from each visualization/query result
+
+## 2. Data Analysis
+- Compare the different data points (highest vs lowest, etc.)
+- Calculate percentages and differences where relevant
+- Identify any anomalies or outliers in the data
+
+## 3. Business Impact
+- What do these numbers mean for the business?
+- What opportunities or risks does the data reveal?
+- Which areas need attention based on the metrics?
+
+## 4. Actionable Recommendations
+- Specific, prioritized next steps based on the findings
+- What further analysis would be valuable?
+- Quick wins vs long-term improvements
+
+FORMAT: Use markdown with headers, bullet points, and bold for key numbers.
+TONE: Professional but accessible, like presenting to executives.
+LENGTH: Comprehensive but concise - every sentence should add value.
 """
             
             try:
@@ -528,37 +686,56 @@ Be SPECIFIC and DATA-DRIVEN. Reference actual values from the investigation resu
                 
                 # Provide a fallback analysis when rate limited
                 if "429" in str(e) or "Resource exhausted" in str(e):
-                    # Extract any metrics from completed steps
+                    # Extract actual data from completed steps
                     metrics_summary = self._extract_metrics_from_steps()
+                    steps_summary = self._create_simple_summary()
+                    
+                    # Count successful tool calls
+                    successful_tools = [s for s in self.current_investigation if s.step_type == "tool_call" and s.result]
+                    viz_count = len([s for s in successful_tools if s.tool_name and 'chart' in s.tool_name.lower()])
                     
                     fallback_analysis = f"""
-**Investigation Summary**
+## Investigation Summary
 
-The autonomous investigation successfully executed {len(self.current_investigation)} steps:
+The autonomous investigation successfully executed **{len(self.current_investigation)} steps** with **{len(successful_tools)} successful tool calls** and generated **{viz_count} visualizations**.
 
-{self._create_simple_summary()}
+### Steps Completed:
+{steps_summary}
 
-**Key Findings with Available Metrics:**
+---
+
+## Key Findings from Collected Data
+
 {metrics_summary}
 
-**Database Analysis Results:**
-- Database schema successfully analyzed
-- Table structures and relationships identified  
-- Data accessibility confirmed
+---
 
-**Recommendations Based on Available Data:**
-1. **Immediate Action**: Execute key aggregation queries to get specific metrics:
-   - Total revenue: `SELECT SUM(revenue) FROM sales`
-   - Top products: `SELECT product_name, SUM(revenue) FROM sales s JOIN products p ON s.product_id = p.id GROUP BY product_name ORDER BY SUM(revenue) DESC LIMIT 5`
-   - Monthly trends: `SELECT DATE_TRUNC('month', sale_date), SUM(revenue) FROM sales GROUP BY 1 ORDER BY 1`
+## Analysis & Insights
 
-2. **Data Quality**: Ensure data consistency across all tables
-3. **Performance Monitoring**: Set up regular automated analysis
-4. **Visualization**: Use the specific graph tools to create visual dashboards
+Based on the data collected during this investigation:
 
-**Next Steps**: Click "See Results" or "See Relevant Graphs" to execute comprehensive queries and generate visualizations.
+1. **Data Coverage**: The investigation successfully queried the database and retrieved relevant metrics.
 
-**Note**: Full analysis was limited due to API rate limiting. The system will automatically execute key queries when you use the action buttons above.
+2. **Visualization Status**: {viz_count} chart(s) were generated to visualize the data. Scroll up to view them in the investigation steps.
+
+3. **Data Quality**: The queries executed successfully, indicating good data integrity.
+
+---
+
+## Recommendations
+
+1. **Review Visualizations**: Check the generated charts above for visual insights into the data patterns.
+
+2. **Deep Dive Analysis**: For more detailed analysis, consider:
+   - Breaking down metrics by different time periods
+   - Comparing performance across regions/categories
+   - Identifying top/bottom performers
+
+3. **Next Steps**: Use the investigation steps above to understand the data flow and results.
+
+---
+
+*Note: Detailed LLM analysis was limited due to API rate constraints. The data shown above is extracted directly from the completed investigation steps.*
 """
                     
                     fallback_step = AgenticInvestigationStep(
@@ -578,6 +755,8 @@ The autonomous investigation successfully executed {len(self.current_investigati
     
     def _create_findings_summary(self) -> str:
         """Create a detailed summary of all investigation findings with actual data"""
+        import json
+        
         if not self.current_investigation:
             return "No investigation data available."
         
@@ -591,46 +770,116 @@ The autonomous investigation successfully executed {len(self.current_investigati
             if step.step_type == "tool_call" and step.result:
                 summary_parts.append(f"{'='*60}")
                 summary_parts.append(f"STEP {i}: {step.tool_name.upper() if step.tool_name else 'UNKNOWN'}")
+                summary_parts.append(f"Description: {step.description}")
                 summary_parts.append(f"{'='*60}")
                 
                 if step.parameters:
-                    summary_parts.append(f"Parameters: {step.parameters}")
+                    summary_parts.append(f"Parameters: {json.dumps(step.parameters, default=str)}")
                     summary_parts.append("")
                 
-                # Get actual data - handle both old and new structure
-                result_data = step.result.get('data', step.result) if isinstance(step.result, dict) else step.result
+                result = step.result
                 
-                # Extract and format the actual results
-                if isinstance(result_data, dict):
-                    # Handle anomaly detection results
-                    if step.tool_name and 'anomal' in step.tool_name.lower():
-                        import json
-                        summary_parts.append("ANOMALY DETECTION RESULTS:")
-                        summary_parts.append(json.dumps(result_data, indent=2, default=str))
-                    # Handle chart data
-                    elif step.tool_name and 'chart' in step.tool_name.lower():
-                        if isinstance(result_data, list) and len(result_data) > 0:
-                            summary_parts.append(f"Chart Data ({len(result_data)} data points):")
-                            summary_parts.append(f"First 5 records: {result_data[:5]}")
-                    # Handle business metrics/summary
-                    elif step.tool_name and ('metrics' in step.tool_name.lower() or 'summary' in step.tool_name.lower()):
-                        import json
-                        summary_parts.append("BUSINESS METRICS:")
-                        summary_parts.append(json.dumps(result_data, indent=2, default=str))
-                    # Handle schema
-                    elif step.tool_name and 'schema' in step.tool_name.lower():
-                        summary_parts.append("Database schema retrieved successfully")
-                    # Default handling
+                # Handle visualization tool results (bar chart, line chart, pie chart, scatter plot)
+                if step.tool_name and any(chart in step.tool_name.lower() for chart in ['chart', 'plot', 'graph']):
+                    summary_parts.append(f"VISUALIZATION: {result.get('title', 'Chart')}")
+                    summary_parts.append(f"Chart Type: {result.get('chart_type', 'unknown')}")
+                    
+                    chart_data = result.get('chart_data', {})
+                    if chart_data:
+                        # Extract labels and values for bar/pie charts
+                        if 'labels' in chart_data and 'values' in chart_data:
+                            labels = chart_data['labels']
+                            values = chart_data['values']
+                            summary_parts.append(f"\nDATA ({len(labels)} items):")
+                            for label, value in zip(labels, values):
+                                if isinstance(value, (int, float)):
+                                    summary_parts.append(f"  • {label}: {value:,.2f}")
+                                else:
+                                    summary_parts.append(f"  • {label}: {value}")
+                            
+                            # Calculate totals and stats
+                            if all(isinstance(v, (int, float)) for v in values):
+                                total = sum(values)
+                                avg = total / len(values) if values else 0
+                                max_val = max(values) if values else 0
+                                min_val = min(values) if values else 0
+                                max_label = labels[values.index(max_val)] if values else "N/A"
+                                min_label = labels[values.index(min_val)] if values else "N/A"
+                                summary_parts.append(f"\nSTATISTICS:")
+                                summary_parts.append(f"  • Total: {total:,.2f}")
+                                summary_parts.append(f"  • Average: {avg:,.2f}")
+                                summary_parts.append(f"  • Highest: {max_label} ({max_val:,.2f})")
+                                summary_parts.append(f"  • Lowest: {min_label} ({min_val:,.2f})")
+                        
+                        # Extract datasets for line charts
+                        if 'datasets' in chart_data:
+                            labels = chart_data.get('labels', [])
+                            summary_parts.append(f"\nTIME SERIES DATA (periods: {len(labels)}):")
+                            if labels:
+                                summary_parts.append(f"  Period range: {labels[0]} to {labels[-1]}")
+                            
+                            for ds in chart_data['datasets']:
+                                ds_name = ds.get('label', 'Series')
+                                ds_values = ds.get('data', [])
+                                if ds_values and all(isinstance(v, (int, float)) for v in ds_values if v is not None):
+                                    valid_values = [v for v in ds_values if v is not None]
+                                    total = sum(valid_values)
+                                    avg = total / len(valid_values) if valid_values else 0
+                                    summary_parts.append(f"  • {ds_name}: Total={total:,.2f}, Avg={avg:,.2f}")
+                
+                # Handle anomaly detection results
+                elif step.tool_name and 'anomal' in step.tool_name.lower():
+                    summary_parts.append("ANOMALY DETECTION RESULTS:")
+                    summary_parts.append(json.dumps(result, indent=2, default=str))
+                
+                # Handle SQL query results
+                elif step.tool_name == 'execute_sql_query':
+                    data = result.get('data', result) if isinstance(result, dict) else result
+                    if isinstance(data, list):
+                        summary_parts.append(f"SQL QUERY RESULTS ({len(data)} rows):")
+                        for row in data[:10]:  # Show first 10 rows
+                            if isinstance(row, dict):
+                                row_parts = []
+                                for k, v in row.items():
+                                    if isinstance(v, (int, float)):
+                                        row_parts.append(f"{k}={v:,.2f}")
+                                    else:
+                                        row_parts.append(f"{k}={v}")
+                                summary_parts.append(f"  • {', '.join(row_parts)}")
+                
+                # Handle comparison results
+                elif step.tool_name and 'compare' in step.tool_name.lower():
+                    summary_parts.append("TIME PERIOD COMPARISON RESULTS:")
+                    if 'error' in result:
+                        summary_parts.append(f"  ERROR: {result['error']}")
                     else:
-                        if 'error' in result_data:
-                            summary_parts.append(f"ERROR: {result_data['error']}")
+                        summary_parts.append(json.dumps(result, indent=2, default=str))
+                
+                # Handle business metrics
+                elif step.tool_name and ('metrics' in step.tool_name.lower() or 'summary' in step.tool_name.lower()):
+                    summary_parts.append("BUSINESS METRICS:")
+                    summary_parts.append(json.dumps(result, indent=2, default=str))
+                
+                # Handle schema
+                elif step.tool_name and 'schema' in step.tool_name.lower():
+                    tables = result.get('tables', [])
+                    summary_parts.append(f"DATABASE SCHEMA: {len(tables)} tables found")
+                    for table in tables[:5]:
+                        summary_parts.append(f"  • {table.get('name', 'unknown')}: {len(table.get('columns', []))} columns")
+                
+                # Default handling for other tools
+                else:
+                    if isinstance(result, dict):
+                        if 'error' in result:
+                            summary_parts.append(f"ERROR: {result['error']}")
                         else:
-                            import json
-                            summary_parts.append(json.dumps(result_data, indent=2, default=str))
-                elif isinstance(result_data, list):
-                    summary_parts.append(f"Results: {len(result_data)} records")
-                    if len(result_data) > 0:
-                        summary_parts.append(f"First record: {result_data[0]}")
+                            summary_parts.append(json.dumps(result, indent=2, default=str))
+                    elif isinstance(result, list):
+                        summary_parts.append(f"Results: {len(result)} records")
+                        if result:
+                            summary_parts.append(f"Sample: {result[:3]}")
+                    else:
+                        summary_parts.append(str(result))
                 
                 summary_parts.append("")  # Add blank line
         
@@ -655,11 +904,13 @@ The autonomous investigation successfully executed {len(self.current_investigati
         return "\n".join(summary_parts)
     
     def _extract_metrics_from_steps(self) -> str:
-        """Extract any numerical metrics from completed investigation steps"""
+        """Extract actual data and metrics from completed investigation steps"""
         if not self.current_investigation:
             return "No metrics available from completed steps."
         
         metrics = []
+        visualizations_data = []
+        
         for step in self.current_investigation:
             if step.step_type == "tool_call" and step.result:
                 # Get actual data - handle both old and new structure
@@ -668,23 +919,52 @@ The autonomous investigation successfully executed {len(self.current_investigati
                 if not data:
                     continue
                 
+                # Extract from visualization tools
+                if step.tool_name in ['generate_bar_chart', 'generate_line_chart', 'generate_pie_chart', 'generate_scatter_plot']:
+                    chart_data = step.result.get('chart_data', {})
+                    if chart_data:
+                        # Extract labels and values from chart data
+                        if 'labels' in chart_data and 'values' in chart_data:
+                            viz_summary = [f"\n**{step.result.get('title', step.tool_name)}:**"]
+                            labels = chart_data['labels']
+                            values = chart_data['values']
+                            for label, value in zip(labels[:10], values[:10]):  # Limit to 10 rows
+                                if isinstance(value, (int, float)):
+                                    viz_summary.append(f"  - {label}: ${value:,.2f}" if 'revenue' in str(step.description).lower() else f"  - {label}: {value:,.0f}")
+                                else:
+                                    viz_summary.append(f"  - {label}: {value}")
+                            visualizations_data.append("\n".join(viz_summary))
+                        
+                        # For datasets (line charts)
+                        if 'datasets' in chart_data:
+                            viz_summary = [f"\n**{step.result.get('title', step.tool_name)}:**"]
+                            datasets = chart_data['datasets']
+                            for ds in datasets[:5]:  # Limit to 5 datasets
+                                ds_name = ds.get('label', 'Dataset')
+                                ds_values = ds.get('data', [])
+                                if ds_values:
+                                    total = sum(v for v in ds_values if isinstance(v, (int, float)))
+                                    viz_summary.append(f"  - {ds_name}: Total ${total:,.2f}" if 'revenue' in str(step.description).lower() else f"  - {ds_name}: {total:,.0f}")
+                            visualizations_data.append("\n".join(viz_summary))
+                
                 # Extract metrics from SQL query results
-                if isinstance(data, list) and len(data) > 0:
+                elif isinstance(data, list) and len(data) > 0:
                     if step.tool_name == 'execute_sql_query':
-                        # Try to extract meaningful metrics
-                        first_row = data[0] if data else {}
-                        if isinstance(first_row, dict):
-                            for key, value in first_row.items():
-                                if isinstance(value, (int, float)) and value > 0:
-                                    metrics.append(f"- {key}: {value:,.0f}")
-                    
-                    metrics.append(f"- {step.tool_name}: {len(data)} records analyzed")
+                        # Show first few rows of results
+                        metrics.append(f"\n**SQL Query Results ({len(data)} rows):**")
+                        for row in data[:5]:  # Limit to 5 rows
+                            if isinstance(row, dict):
+                                row_str = ", ".join(f"{k}: {v:,.2f}" if isinstance(v, (int, float)) else f"{k}: {v}" for k, v in row.items())
+                                metrics.append(f"  - {row_str}")
+                    else:
+                        metrics.append(f"- {step.tool_name}: {len(data)} records analyzed")
                 
                 # Extract table information
                 elif isinstance(data, dict):
                     if 'tables' in data:  # Schema information
                         table_count = len(data['tables'])
-                        metrics.append(f"- Database contains {table_count} tables")
+                        table_names = [t.get('name', 'unknown') for t in data['tables'][:5]]
+                        metrics.append(f"- Database contains {table_count} tables: {', '.join(table_names)}")
                     
                     if 'total_records' in data:
                         metrics.append(f"- Total records: {data['total_records']:,}")
@@ -702,8 +982,24 @@ The autonomous investigation successfully executed {len(self.current_investigati
                         for key, val in data['summary'].items():
                             if isinstance(val, (int, float)):
                                 metrics.append(f"- {key}: {val:,.2f}")
+                    
+                    # Extract comparison results
+                    if 'period1_total' in data:
+                        metrics.append(f"\n**Time Period Comparison:**")
+                        metrics.append(f"  - Period 1 Total: ${data.get('period1_total', 0):,.2f}")
+                        metrics.append(f"  - Period 2 Total: ${data.get('period2_total', 0):,.2f}")
+                        metrics.append(f"  - Change: {data.get('percent_change', 0):.1f}%")
         
-        return "\n".join(metrics) if metrics else "- Investigation in progress, metrics will be available upon completion"
+        # Combine metrics and visualization data
+        all_content = []
+        if visualizations_data:
+            all_content.append("**Data from Visualizations:**")
+            all_content.extend(visualizations_data)
+        if metrics:
+            all_content.append("\n**Additional Metrics:**")
+            all_content.extend(metrics)
+        
+        return "\n".join(all_content) if all_content else "- Investigation in progress, metrics will be available upon completion"
     
     async def _generate_with_tools(self, prompt: str, tool_definitions: List[Dict]) -> Any:
         """Generate response with tool calling capability"""
@@ -822,3 +1118,65 @@ SQL:"""
             "investigation_context": self.investigation_context,
             "steps": [step.to_dict() for step in self.current_investigation]
         }
+    
+    def save_to_memory(self, user_query: str) -> None:
+        """Save the current investigation to conversation memory"""
+        if not self.current_investigation:
+            return
+        
+        # Extract key information from investigation
+        tool_calls = [step for step in self.current_investigation if step.step_type == "tool_call"]
+        conclusions = [step for step in self.current_investigation if step.step_type == "conclusion"]
+        
+        # Get tools used
+        tools_used = list(set(step.tool_name for step in tool_calls if step.tool_name))
+        
+        # Get any SQL that was generated
+        sql_generated = None
+        for step in tool_calls:
+            if step.tool_name == "execute_sql_query" and step.parameters:
+                sql_generated = step.parameters.get("query", step.parameters.get("sql"))
+                break
+        
+        # Get visualization type
+        visualization_type = None
+        for step in tool_calls:
+            if step.tool_name and "chart" in step.tool_name.lower():
+                visualization_type = step.tool_name
+                break
+        
+        # Get conclusion/response
+        assistant_response = ""
+        if conclusions:
+            last_conclusion = conclusions[-1]
+            if last_conclusion.result and isinstance(last_conclusion.result, dict):
+                assistant_response = last_conclusion.result.get("analysis", "")
+        
+        # Build results summary
+        results_summary = {
+            "total_steps": len(self.current_investigation),
+            "tools_executed": len(tool_calls),
+            "tools_list": tools_used[:5]  # Limit to first 5
+        }
+        
+        # Add any numeric results we can extract
+        for step in tool_calls:
+            if step.result and isinstance(step.result, dict):
+                data = step.result.get("data", {})
+                if isinstance(data, dict):
+                    if "row_count" in data:
+                        results_summary["row_count"] = data["row_count"]
+                    if "total" in data:
+                        results_summary["total"] = data["total"]
+        
+        # Save to memory
+        self.memory.add_exchange(
+            user_query=user_query,
+            assistant_response=assistant_response[:1000] if assistant_response else "Investigation completed",
+            sql_generated=sql_generated,
+            results_summary=results_summary,
+            visualization_type=visualization_type,
+            tools_used=tools_used
+        )
+        
+        logger.info(f"💾 Saved investigation to memory. Buffer: {len(self.memory.exchanges)}/{self.memory.max_exchanges}")

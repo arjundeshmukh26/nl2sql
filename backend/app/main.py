@@ -508,17 +508,21 @@ async def start_agentic_investigation(request: AgenticQueryRequest):
         
         logger.info(f"🚀 Starting agentic investigation: '{request.query}'")
         
-        # Collect all investigation steps
-        investigation_steps = []
-        
+        # Run through the investigation generator to completion
+        # We don't capture steps during yield because results aren't set yet
         async for step in agentic_client.autonomous_investigation(request.query, stream_steps=True):
-            investigation_steps.append(step.to_dict())
+            pass  # Just iterate through to completion
+        
+        # Get the completed investigation steps WITH results from current_investigation
+        investigation_steps = [step.to_dict() for step in agentic_client.current_investigation]
         
         # Get investigation summary
         summary = agentic_client.get_investigation_summary()
         
         # Calculate execution time
         execution_time_ms = (time.time() - start_time) * 1000
+        
+        logger.info(f"✅ Investigation completed with {len(investigation_steps)} steps")
         
         return {
             "query": request.query,

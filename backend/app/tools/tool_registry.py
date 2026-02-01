@@ -50,6 +50,10 @@ from .anomaly_detection_tools import (
     DetectTimePatternAnomalies,
     DetectCustomerBehaviorAnomalies
 )
+from .memory_tools import (
+    GetConversationContextTool,
+    SearchConversationMemoryTool
+)
 
 
 class ToolRegistry:
@@ -105,6 +109,10 @@ class ToolRegistry:
         self.register_tool(DetectRevenueAnomalies(self.db_manager))
         self.register_tool(DetectTimePatternAnomalies(self.db_manager))
         self.register_tool(DetectCustomerBehaviorAnomalies(self.db_manager))
+        
+        # Memory/Context tools
+        self.register_tool(GetConversationContextTool(self.db_manager))
+        self.register_tool(SearchConversationMemoryTool(self.db_manager))
     
     def register_tool(self, tool: BaseTool):
         """Register a tool in the registry"""
@@ -166,6 +174,10 @@ class ToolRegistry:
                 "detect_revenue_anomalies",
                 "detect_time_pattern_anomalies", 
                 "detect_customer_behavior_anomalies"
+            ],
+            "memory_context": [
+                "get_conversation_context",
+                "search_conversation_memory"
             ]
         }
         return categories

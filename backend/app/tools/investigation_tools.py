@@ -341,42 +341,43 @@ class CompareTimePeriodsTool(BaseTool):
             if group_by_column and group_by_column not in available_columns:
                 return ToolResult(success=False, error=f"Group by column '{group_by_column}' not found")
             
-            # Build comparison query
-            group_clause = f", {group_by_column}" if group_by_column else ""
-            group_select = f"{group_by_column}, " if group_by_column else ""
-            group_by_sql = f"GROUP BY {group_by_column}" if group_by_column else ""
+            # Build comparison query with proper table aliases
+            # Use explicit alias for group_by_column to avoid ambiguity
+            group_select_p1 = f"t.{group_by_column} as group_key, " if group_by_column else ""
+            group_select_p2 = f"t.{group_by_column} as group_key, " if group_by_column else ""
+            group_by_sql = f"GROUP BY t.{group_by_column}" if group_by_column else ""
             
             comparison_query = f"""
                 WITH period1_data AS (
                     SELECT 
-                        {group_select}
-                        SUM({metric_column}) as period1_total,
-                        AVG({metric_column}) as period1_avg,
+                        {group_select_p1}
+                        SUM(t.{metric_column}) as period1_total,
+                        AVG(t.{metric_column}) as period1_avg,
                         COUNT(*) as period1_count,
-                        MIN({metric_column}) as period1_min,
-                        MAX({metric_column}) as period1_max
-                    FROM {table_name}
-                    WHERE {date_column} >= '{period1_start}' 
-                    AND {date_column} <= '{period1_end}'
-                    AND {metric_column} IS NOT NULL
+                        MIN(t.{metric_column}) as period1_min,
+                        MAX(t.{metric_column}) as period1_max
+                    FROM {table_name} t
+                    WHERE t.{date_column} >= '{period1_start}' 
+                    AND t.{date_column} <= '{period1_end}'
+                    AND t.{metric_column} IS NOT NULL
                     {group_by_sql}
                 ),
                 period2_data AS (
                     SELECT 
-                        {group_select}
-                        SUM({metric_column}) as period2_total,
-                        AVG({metric_column}) as period2_avg,
+                        {group_select_p2}
+                        SUM(t.{metric_column}) as period2_total,
+                        AVG(t.{metric_column}) as period2_avg,
                         COUNT(*) as period2_count,
-                        MIN({metric_column}) as period2_min,
-                        MAX({metric_column}) as period2_max
-                    FROM {table_name}
-                    WHERE {date_column} >= '{period2_start}' 
-                    AND {date_column} <= '{period2_end}'
-                    AND {metric_column} IS NOT NULL
+                        MIN(t.{metric_column}) as period2_min,
+                        MAX(t.{metric_column}) as period2_max
+                    FROM {table_name} t
+                    WHERE t.{date_column} >= '{period2_start}' 
+                    AND t.{date_column} <= '{period2_end}'
+                    AND t.{metric_column} IS NOT NULL
                     {group_by_sql}
                 )
                 SELECT 
-                    {group_select.rstrip(', ') + ',' if group_select else ''}
+                    {'COALESCE(p1.group_key, p2.group_key) as group_key,' if group_by_column else ''}
                     COALESCE(p1.period1_total, 0) as period1_total,
                     COALESCE(p2.period2_total, 0) as period2_total,
                     COALESCE(p1.period1_avg, 0) as period1_avg,
@@ -391,7 +392,7 @@ class CompareTimePeriodsTool(BaseTool):
                     END as percentage_change,
                     COALESCE(p2.period2_avg, 0) - COALESCE(p1.period1_avg, 0) as avg_change
                 FROM period1_data p1
-                FULL OUTER JOIN period2_data p2 ON {f'p1.{group_by_column} = p2.{group_by_column}' if group_by_column else '1=1'}
+                FULL OUTER JOIN period2_data p2 ON {'p1.group_key = p2.group_key' if group_by_column else '1=1'}
                 ORDER BY ABS(COALESCE(p2.period2_total, 0) - COALESCE(p1.period1_total, 0)) DESC
             """
             

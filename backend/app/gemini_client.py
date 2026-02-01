@@ -15,7 +15,7 @@ class GeminiClient:
         genai.configure(api_key=settings.gemini_api_key)
         
         # Initialize the model
-        self.model = genai.GenerativeModel('gemini-2.5-flash-lite')
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
         
         # Generation config for consistent JSON output
         self.generation_config = genai.types.GenerationConfig(
