@@ -438,15 +438,6 @@ Academic project for B.Tech degree requirements. All rights reserved by the proj
 
 ---
 
-## ⭐ Quick Links
 
-- **Live Demo**: *(Coming Soon)*
-- **API Documentation**: http://localhost:8000/docs
-- **Health Check**: http://localhost:8000/health
-- **Frontend**: http://localhost:5173
 
----
 
-**Built with ❤️ by Team Agentic AI @ IIIT Kottayam**
-
-*Last Updated: November 2025*
