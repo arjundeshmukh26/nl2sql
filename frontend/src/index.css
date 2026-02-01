@@ -4,11 +4,11 @@
 
 @layer base {
   * {
-    @apply border-gray-200;
+    @apply border-slate-200;
   }
   
   body {
-    @apply bg-gray-50 text-gray-900 font-sans;
+    @apply bg-stone-50 text-slate-900 font-sans;
     font-feature-settings: 'rlig' 1, 'calt' 1;
   }
   
@@ -18,6 +18,38 @@
 }
 
 @layer components {
+  /* Modern button styles */
+  .btn {
+    @apply inline-flex items-center justify-center px-4 py-2 text-sm font-medium rounded-lg border transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-offset-2;
+  }
+  
+  .btn-primary {
+    @apply bg-gradient-to-r from-iris-600 to-coral-500 text-white border-transparent hover:from-iris-700 hover:to-coral-600 focus:ring-iris-500 shadow-sm;
+  }
+  
+  .btn-ghost {
+    @apply text-slate-600 bg-transparent border-transparent hover:bg-slate-100 hover:text-slate-900 focus:ring-slate-500;
+  }
+  
+  .btn-secondary {
+    @apply bg-white text-slate-700 border-slate-300 hover:bg-slate-50 focus:ring-slate-500 shadow-sm;
+  }
+  
+  /* Modern card styles */
+  .card {
+    @apply bg-white rounded-xl border border-slate-200 shadow-sm;
+  }
+  
+  .card-interactive {
+    @apply card hover:shadow-md hover:border-slate-300 transition-all duration-200 cursor-pointer;
+  }
+  
+  /* Modern input styles */
+  .input {
+    @apply w-full px-4 py-3 text-slate-900 bg-white border border-slate-300 rounded-lg placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-iris-500 focus:border-transparent transition-all duration-200;
+  }
+  
+  /* Glass effects */
   .glass-effect {
     @apply bg-white/80 backdrop-blur-sm border border-white/20;
   }
@@ -27,15 +59,25 @@
   }
   
   .text-gradient {
-    @apply bg-gradient-to-r from-primary-600 to-primary-800 bg-clip-text text-transparent;
+    @apply bg-gradient-to-r from-iris-600 to-coral-500 bg-clip-text text-transparent;
   }
   
+  /* Modern shadows */
   .shadow-elegant {
     box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
   }
   
   .shadow-elegant-lg {
     box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.1), 0 4px 6px -2px rgba(0, 0, 0, 0.05);
+  }
+  
+  /* Animation utilities */
+  .animate-fade-in {
+    animation: fadeIn 0.5s ease-out;
+  }
+  
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
   }
 }
 
@@ -76,4 +118,26 @@
   40% { content: '.'; }
   60% { content: '..'; }
   80%, 100% { content: '...'; }
+}
+
+@keyframes fadeIn {
+  from { 
+    opacity: 0; 
+    transform: translateY(10px); 
+  }
+  to { 
+    opacity: 1; 
+    transform: translateY(0); 
+  }
+}
+
+@keyframes slideUp {
+  from { 
+    transform: translateY(20px); 
+    opacity: 0; 
+  }
+  to { 
+    transform: translateY(0); 
+    opacity: 1; 
+  }
 }

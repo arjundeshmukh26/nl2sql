@@ -79,6 +79,29 @@ export const apiService = {
     console.log('🌐 API Service: Response data:', response.data)
     
     return response.data
+  },
+
+  // Start agentic investigation
+  async startAgenticInvestigation(query) {
+    const response = await api.post('/agentic-investigation', {
+      query: query
+    })
+    return response.data
+  },
+
+  // Get available tools
+  async getAvailableTools() {
+    const response = await api.get('/tools')
+    return response.data
+  },
+
+  // Execute single tool
+  async executeTool(toolName, parameters) {
+    const response = await api.post('/execute-tool', {
+      tool_name: toolName,
+      parameters: parameters
+    })
+    return response.data
   }
 }
 

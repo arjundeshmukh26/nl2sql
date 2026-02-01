@@ -12,6 +12,11 @@ class QueryRequest(BaseModel):
     """Request model for natural language query"""
     schema_text: str  # User-provided schema
     query: str   # Natural language query
+
+
+class AgenticQueryRequest(BaseModel):
+    """Request model for agentic investigation"""
+    query: str   # Natural language query for investigation
     
 
 class SQLResponse(BaseModel):

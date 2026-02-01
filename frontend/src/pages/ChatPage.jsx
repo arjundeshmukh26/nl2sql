@@ -576,26 +576,35 @@ const ChatPage = () => {
   ]
 
   return (
-    <div className="h-screen flex flex-col bg-gradient-to-br from-gray-50 to-gray-100">
+    <div className="h-screen flex flex-col bg-stone-50">
       {/* Header */}
-      <header className="glass-effect border-b border-white/20 px-6 py-4 flex items-center justify-between">
-        <div className="flex items-center space-x-3">
-          <div className="p-2 bg-primary-100 rounded-lg">
-            <Sparkles className="h-6 w-6 text-primary-600" />
+      <header className="bg-white/80 backdrop-blur-sm border-b border-slate-200 px-6 py-3 flex items-center justify-between sticky top-0 z-10">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center justify-center w-9 h-9 rounded-lg bg-gradient-to-br from-iris-500 to-iris-600 text-white">
+            <Database className="h-4 w-4" />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-gray-900">NL2SQL Chat</h1>
-            <p className="text-sm text-gray-600">Ask questions about your data in natural language</p>
+            <h1 className="text-base font-semibold text-slate-900">Query Assistant</h1>
+            <p className="text-xs text-slate-500">Ask questions in plain English</p>
           </div>
         </div>
         
-        <button
-          onClick={() => navigate('/config')}
-          className="flex items-center space-x-2 px-4 py-2 text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg transition-colors"
-        >
-          <Settings className="h-4 w-4" />
-          <span>Configure</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => navigate('/agentic')}
+            className="btn bg-gradient-to-r from-coral-500 to-iris-500 text-white px-3 py-2 text-sm gap-2 hover:from-coral-600 hover:to-iris-600"
+          >
+            <Sparkles className="h-4 w-4" />
+            <span className="hidden sm:inline">Agentic Mode</span>
+          </button>
+          <button
+            onClick={() => navigate('/config')}
+            className="btn btn-ghost px-3 py-2 text-sm gap-2"
+          >
+            <Settings className="h-4 w-4" />
+            <span className="hidden sm:inline">Settings</span>
+          </button>
+        </div>
       </header>
 
       {/* Messages Area */}

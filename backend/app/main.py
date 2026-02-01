@@ -5,9 +5,11 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
-from .models import QueryRequest, QueryResponse, SQLResponse, ErrorResponse, SchemaInput
+from .models import QueryRequest, QueryResponse, SQLResponse, ErrorResponse, SchemaInput, AgenticQueryRequest
 from .gemini_client import GeminiClient
+from .agentic_client import AgenticGeminiClient, AgenticInvestigationStep
 from .database import DatabaseManager
+from .tools.tool_registry import initialize_tools
 
 # Configure logging
 logging.basicConfig(
@@ -35,6 +37,10 @@ app.add_middleware(
 # Initialize components
 gemini_client = GeminiClient()
 db_manager = DatabaseManager()
+
+# Initialize agentic system
+tool_registry = initialize_tools(db_manager)
+agentic_client = AgenticGeminiClient(db_manager)
 
 
 @app.get("/")
@@ -486,6 +492,186 @@ IMPORTANT:
             raise HTTPException(
                 status_code=500,
                 detail=f"Visualization generation failed: {error_msg}"
+            )
+
+
+@app.post("/agentic-investigation")
+async def start_agentic_investigation(request: AgenticQueryRequest):
+    """Start an autonomous database investigation"""
+    
+    start_time = time.time()
+    
+    try:
+        # Validate inputs
+        if not request.query.strip():
+            raise HTTPException(status_code=400, detail="Query is required")
+        
+        logger.info(f"🚀 Starting agentic investigation: '{request.query}'")
+        
+        # Collect all investigation steps
+        investigation_steps = []
+        
+        async for step in agentic_client.autonomous_investigation(request.query, stream_steps=True):
+            investigation_steps.append(step.to_dict())
+        
+        # Get investigation summary
+        summary = agentic_client.get_investigation_summary()
+        
+        # Calculate execution time
+        execution_time_ms = (time.time() - start_time) * 1000
+        
+        return {
+            "query": request.query,
+            "investigation_steps": investigation_steps,
+            "summary": summary,
+            "execution_time_ms": execution_time_ms,
+            "total_steps": len(investigation_steps),
+            "tools_used": summary.get("tools_used", [])
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ Agentic investigation failed: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Investigation failed: {error_msg}"
+        )
+
+
+@app.get("/tools")
+async def list_available_tools():
+    """Get list of all available tools and their capabilities"""
+    
+    try:
+        tool_help = tool_registry.get_tool_help()
+        tool_stats = tool_registry.get_tool_usage_stats()
+        
+        return {
+            "available_tools": tool_help,
+            "usage_statistics": tool_stats,
+            "total_tools": len(tool_registry.list_tools()),
+            "tool_categories": tool_registry.get_tools_by_category()
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error getting tools info: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get tools information: {str(e)}"
+        )
+
+
+@app.post("/execute-tool")
+async def execute_single_tool(tool_request: dict):
+    """Execute a single tool for testing purposes"""
+    
+    try:
+        tool_name = tool_request.get("tool_name")
+        parameters = tool_request.get("parameters", {})
+        
+        if not tool_name:
+            raise HTTPException(status_code=400, detail="tool_name is required")
+        
+        logger.info(f"🛠️ Executing tool: {tool_name} with params: {parameters}")
+        
+        result = await tool_registry.execute_tool(tool_name, **parameters)
+        
+        return {
+            "tool_name": tool_name,
+            "parameters": parameters,
+            "success": result.success,
+            "data": result.data,
+            "error": result.error,
+            "execution_time_ms": result.execution_time_ms,
+            "metadata": result.metadata
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"❌ Tool execution failed: {error_msg}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Tool execution failed: {error_msg}"
+        )
+
+
+@app.get("/test-schema")
+async def test_database_schema():
+    """Test database schema retrieval directly"""
+    try:
+        logger.info("🧪 Testing database schema retrieval")
+        
+        # Execute the schema tool directly
+        result = await tool_registry.execute_tool("get_database_schema")
+        
+        return {
+            "success": result.success,
+            "data": result.data if result.success else None,
+            "error": result.error if not result.success else None,
+            "execution_time_ms": result.execution_time_ms,
+            "metadata": result.metadata
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Schema test failed: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Schema test failed: {str(e)}"
+        )
+
+
+@app.get("/list-models")
+async def list_gemini_models():
+    """List available Gemini models"""
+    try:
+        import google.generativeai as genai
+        
+        logger.info("🔍 Listing available Gemini models")
+        
+        # Configure API using existing settings
+        genai.configure(api_key=settings.gemini_api_key)
+        
+        # Get all available models
+        models = list(genai.list_models())
+        
+        model_info = []
+        generation_models = []
+        
+        for model in models:
+            info = {
+                "name": model.name,
+                "display_name": model.display_name,
+                "supported_methods": list(model.supported_generation_methods) if hasattr(model, 'supported_generation_methods') else []
+            }
+            
+            if hasattr(model, 'description'):
+                info["description"] = model.description
+            
+            model_info.append(info)
+            
+            # Check if it supports generateContent
+            if 'generateContent' in info["supported_methods"]:
+                generation_models.append(model.name)
+        
+        logger.info(f"✅ Found {len(models)} total models, {len(generation_models)} support generateContent")
+        
+        return {
+            "success": True,
+            "total_models": len(models),
+            "all_models": model_info,
+            "generation_models": generation_models,
+            "recommended": generation_models[0] if generation_models else None
+        }
+        
+    except Exception as e:
+        logger.error(f"❌ Error listing models: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to list models: {str(e)}"
             )
 
 

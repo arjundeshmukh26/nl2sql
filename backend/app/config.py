@@ -15,7 +15,7 @@ class Settings:
     
     # App Settings
     debug: bool = os.getenv("DEBUG", "True").lower() == "true"
-    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:5173"]
+    cors_origins: List[str] = ["http://localhost:3000", "http://localhost:3001", "http://localhost:5173"]
     
     # Query limits
     max_query_results: int = 1000

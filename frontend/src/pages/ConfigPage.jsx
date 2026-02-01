@@ -91,34 +91,34 @@ Table: sales
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4">
+    <div className="min-h-screen bg-stone-50 flex items-center justify-center p-4">
       <div className="w-full max-w-4xl">
         {/* Header */}
         <div className="text-center mb-8 animate-fade-in">
           <div className="flex items-center justify-center mb-4">
-            <div className="p-3 bg-primary-100 rounded-2xl">
-              <Sparkles className="h-8 w-8 text-primary-600" />
+            <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-iris-100 to-coral-100">
+              <Settings className="h-8 w-8 text-iris-600" />
             </div>
           </div>
-          <h1 className="text-4xl font-bold text-gray-900 mb-2">
+          <h1 className="text-4xl font-bold text-slate-900 mb-2">
             Configure Your <span className="text-gradient">NL2SQL</span> System
           </h1>
-          <p className="text-lg text-gray-600 max-w-2xl mx-auto">
+          <p className="text-lg text-slate-600 max-w-2xl mx-auto">
             Set up your database connection and schema to start converting natural language to SQL queries
           </p>
         </div>
 
         {/* Configuration Form */}
-        <div className="glass-effect rounded-3xl p-8 shadow-elegant-lg animate-slide-up">
+        <div className="card rounded-3xl p-8 shadow-elegant-lg animate-slide-up">
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             
             {/* Database Configuration */}
             <div className="space-y-6">
-              <div className="flex items-center space-x-3 mb-6">
-                <div className="p-2 bg-primary-100 rounded-lg">
-                  <Database className="h-5 w-5 text-primary-600" />
+              <div className="flex items-center gap-3 mb-6">
+                <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-iris-100 to-iris-200">
+                  <Database className="h-5 w-5 text-iris-600" />
                 </div>
-                <h2 className="text-xl font-semibold text-gray-900">Database Connection</h2>
+                <h2 className="text-xl font-semibold text-slate-900">Database Connection</h2>
               </div>
               
               <div>
@@ -215,8 +215,20 @@ Table: sales
                 disabled={isValidating}
                 className="px-8 py-3 bg-primary-600 text-white rounded-xl hover:bg-primary-700 transition-colors font-medium flex items-center space-x-2 disabled:opacity-50"
               >
-                <span>Continue to Chat</span>
+                <span>Simple Chat</span>
                 <ArrowRight className="h-4 w-4" />
+              </button>
+              
+              <button
+                onClick={() => {
+                  updateConfig({ isConfigured: true })
+                  navigate('/agentic')
+                }}
+                disabled={isValidating}
+                className="px-8 py-3 bg-purple-600 text-white rounded-xl hover:bg-purple-700 transition-colors font-medium flex items-center space-x-2 disabled:opacity-50"
+              >
+                <span>Agentic Investigation</span>
+                <Sparkles className="h-4 w-4" />
               </button>
             </div>
           </div>
