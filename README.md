@@ -329,7 +329,7 @@ nl2sql/
 
 ---
 
-## 👥 Team
+## 👥 Contributors
 
 B.Tech Computer Science and Engineering  
 Indian Institute of Information Technology Kottayam
