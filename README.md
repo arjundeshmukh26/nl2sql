@@ -22,7 +22,7 @@ The system will:
 
 - 🔍 Explore your database schema automatically  
 - 🧠 Decide what sub-questions to investigate  
-- 📊 Run multi-step analysis using 22 specialized tools  
+- 📊 Run multi-step analysis using 26 specialized tools  
 - 🚨 Detect anomalies and unusual patterns  
 - 📈 Generate interactive visualizations  
 - 💡 Provide strategic, actionable recommendations  
@@ -110,7 +110,7 @@ It is a reasoning pipeline.
 └───────────────────────┬──────────────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────────────┐
-│  Dynamic Tool Registry (22 Specialized Tools)       │
+│  Dynamic Tool Registry (26 Specialized Tools)       │
 └───────────────────────┬──────────────────────────────┘
                         │
 ┌───────────────────────▼──────────────────────────────┐
@@ -121,7 +121,7 @@ It is a reasoning pipeline.
 
 ---
 
-## 🧰 22 Specialized Tools (6 Categories)
+## 🧰 26 Specialized Tools (6 Categories)
 
 ### 1️⃣ Database Discovery
 - Schema exploration  
@@ -341,7 +341,7 @@ Indian Institute of Information Technology Kottayam
 ## 📊 Project Stats
 
 * 8,000+ lines of code
-* 22 specialized tools
+* 26 specialized tools
 * 6 tool categories
 * 10+ API endpoints
 * 2–5 second average investigation time
